@@ -6,3 +6,5 @@ results/
 results_sim/
 *.pyc
 .env
+results_tune/
+results_holdout/

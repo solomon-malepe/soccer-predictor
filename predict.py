@@ -7,6 +7,10 @@ Uses football-data.co.uk/fixtures.csv for the fixture list and its odds
     home,away,book,H,D,A,O25,U25
     Arsenal,Chelsea,Betway,2.10,3.40,3.50,1.95,1.85
     Arsenal,Chelsea,SportyBet,2.15,3.30,3.45,2.05,1.78
+    Arsenal,Chelsea,Pinnacle,2.20,3.45,3.60,2.02,1.88
+
+The Pinnacle row is required for the 'both' strategy: fixtures.csv has had no
+Pinnacle odds since January 2026.
 
 Team names must match football-data's spelling (e.g. "Man United", "Nott'm Forest").
 
@@ -36,18 +40,29 @@ LABELS = {"H": "Home win", "D": "Draw", "A": "Away win", "O25": "Over 2.5", "U25
 
 
 def apply_my_odds(fixtures: pd.DataFrame, my_odds: pd.DataFrame) -> pd.DataFrame:
-    """Replace soft_* columns with the best of your own bookmaker prices."""
+    """Replace soft_* columns with the best of your own bookmaker prices.
+
+    A row with book "Pinnacle" fills the pin_* columns instead. football-data stopped
+    publishing Pinnacle odds in January 2026, so the 'both' strategy needs these typed in.
+    """
     fx = fixtures.copy()
+    is_pin = my_odds["book"].astype(str).str.strip().str.lower() == "pinnacle"
+    soft, pin = my_odds[~is_pin], my_odds[is_pin]
     for o in OUTCOMES:
         fx[f"soft_{o}"] = np.nan
         fx[f"softbook_{o}"] = ""
     for i, r in fx.iterrows():
-        rows = my_odds[(my_odds["home"] == r["home"]) & (my_odds["away"] == r["away"])]
+        rows = soft[(soft["home"] == r["home"]) & (soft["away"] == r["away"])]
         for o in OUTCOMES:
             if o in rows and rows[o].notna().any():
                 j = rows[o].idxmax()
                 fx.at[i, f"soft_{o}"] = rows.at[j, o]
                 fx.at[i, f"softbook_{o}"] = rows.at[j, "book"]
+        prow = pin[(pin["home"] == r["home"]) & (pin["away"] == r["away"])]
+        if not prow.empty:
+            for o in OUTCOMES:
+                if o in prow and pd.notna(prow[o].iloc[-1]):
+                    fx.at[i, f"pin_{o}"] = prow[o].iloc[-1]
     return fx
 
 
@@ -60,7 +75,8 @@ def main() -> None:
     ap.add_argument("--fixtures-file", help="use a local fixtures.csv instead of downloading")
     ap.add_argument("--strategy", default="both", choices=["model", "pinnacle", "both", "blend"])
     ap.add_argument("--min-edge", type=float, default=0.05)
-    ap.add_argument("--min-edge-pin", type=float, default=0.0)
+    # Locked in Phase 1 (2026-11-15): both, model >=5%, Pinnacle >=2%, odds 1.30-5.00
+    ap.add_argument("--min-edge-pin", type=float, default=0.02)
     ap.add_argument("--max-odds", type=float, default=5.0)
     ap.add_argument("--max-disagreement", type=float, default=0.15)
     ap.add_argument("--ridge", type=float, default=3.0)
@@ -74,6 +90,11 @@ def main() -> None:
     fixtures_all = load_fixtures(args.league, soft_books=args.soft_books, path=args.fixtures_file)
     if args.my_odds:
         fixtures_all = apply_my_odds(fixtures_all, pd.read_csv(args.my_odds))
+    if args.strategy != "model" and len(fixtures_all):
+        no_pin = fixtures_all[[f"pin_{o}" for o in OUTCOMES]].isna().all(axis=1)
+        if no_pin.any():
+            print(f"WARNING: {no_pin.sum()} of {len(fixtures_all)} matches have no Pinnacle odds, so the "
+                  f"'{args.strategy}' rule can't pick them. Add a 'Pinnacle' row per match to --my-odds.")
     cfg = StrategyConfig(name=args.strategy, strategy=args.strategy, min_edge=args.min_edge,
                          min_edge_pin=args.min_edge_pin, max_odds=args.max_odds,
                          max_disagreement=args.max_disagreement)
