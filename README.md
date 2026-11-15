@@ -130,6 +130,44 @@ promoted club), predict.py warns you; add it to `ALIASES` in `predictor/teams.py
 You can correct `odds` if you got a different price, or set `status` to `void`
 for a postponed match. Commit `paper_log.csv` so the record is kept honestly.
 
+## Automation: Supabase + GitHub Actions + Telegram (Phases 4-6)
+
+The odds API can't see Betway SA or SportyBet, so the daily job posts **target
+prices** instead of picks: for each match, the lowest Betway/SportyBet price at
+which a bet passes the locked `both` rule (at most 2 per match, only targets
+within 10% of Pinnacle's price). Friends check their apps; if a book offers the
+target or better they bet 1 unit and reply in the group:
+
+```text
+/took 57 2.90 sportybet
+```
+
+The bot checks the price really meets the target, keeps one pick per match, and
+logs it as a paper pick. `/took` replies are read when the jobs run (08:00 and
+23:30 SAST), not instantly.
+
+| Job | When (SAST) | What it does |
+|---|---|---|
+| `python -m jobs.daily_picks` | 08:00 daily | reads `/took`, fits the model, fetches Pinnacle, posts targets for the next 24h; Monday adds the weekly summary |
+| `python -m jobs.settle` | 23:30 daily | reads `/took`, fetches Pinnacle closing odds, works out CLV, settles results, posts them |
+| `python -m jobs.daily_picks --dry-run --hours 168` | any time | prints next week's targets, saves and sends nothing |
+
+One-time setup:
+
+1. **Supabase:** create a free project. In SQL Editor, run
+   `supabase/migrations/001_init.sql`. From Project Settings, then API, copy the
+   Project URL and the `service_role` key into `.env` as `SUPABASE_URL` and
+   `SUPABASE_SERVICE_KEY`.
+2. **Telegram:** in @BotFather send `/newbot` and put the token in `.env` as
+   `TELEGRAM_BOT_TOKEN`. Add the bot to the group and send `/start` there, and
+   also in a private chat with the bot. Then
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` shows both chat ids: the group
+   (negative number) goes in `TELEGRAM_CHAT_ID`, your private chat in
+   `TELEGRAM_ADMIN_CHAT_ID` (failure alerts).
+3. **GitHub:** `git push`, then `gh secret set -f .env` copies every key from
+   `.env` into the repo's Actions secrets. Test it with
+   `gh workflow run daily.yml -f job=picks-dry-run` and watch it under the Actions tab.
+
 ## Staking
 
 Picks are in **units**. Each person decides what 1 unit is (1-2% of the money
