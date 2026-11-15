@@ -1,0 +1,8 @@
+# Dashboard only (Streamlit Community Cloud reads this file next to app.py).
+# Kept separate so the daily GitHub Actions jobs don't install Streamlit.
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+python-dotenv>=1.0
+streamlit>=1.50
+altair>=5

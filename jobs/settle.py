@@ -101,7 +101,7 @@ def run(args, store, bot=None, client=None, history=None, now=None, log=print) -
             fresh[["id", "clv"]], on="id", how="left")
         log(f"Settled {len(settled)} pick(s)")
         if bot is not None:
-            bot.send(format_settled(settled))
+            bot.send(format_settled(settled), html=True)
     return settled
 
 

@@ -122,13 +122,23 @@ def test_bot_send_and_errors():
         bad.send("hi")
 
 
-def test_format_targets_and_empty_day():
-    t = pd.DataFrame([{"id": 58, "kickoff": "2026-11-22T16:30:00Z", "home": "Liverpool",
-                       "away": "Man United", "outcome": "U25", "target_odds": 2.84, "pin_odds": 2.60}])
-    msg = format_targets(t, now="2026-11-22T06:00:00Z")
-    assert "Sun 18:30  Liverpool v Man United" in msg            # SA time
-    assert "#58  Under 2.5: bet if ≥ 2.84  (Pinnacle 2.60)" in msg
-    assert "PAPER ONLY" in msg
+def test_format_targets_groups_by_day_and_league():
+    t = pd.DataFrame([
+        {"id": 58, "league": "E0", "kickoff": "2026-11-22T16:30:00Z", "home": "Liverpool",
+         "away": "Man United", "outcome": "U25", "target_odds": 2.84, "pin_odds": 2.60, "over_pinnacle": .09},
+        {"id": 12, "league": "SP1", "kickoff": "2026-11-21T20:00:00Z", "home": "Ath Bilbao",
+         "away": "Espanol", "outcome": "D", "target_odds": 3.70, "pin_odds": 3.45, "over_pinnacle": .07},
+        {"id": 13, "league": "E0", "kickoff": "2026-11-21T12:30:00Z", "home": "Brighton & Hove",
+         "away": "Fulham", "outcome": "H", "target_odds": 2.10, "pin_odds": 1.95, "over_pinnacle": .08},
+    ])
+    msg = format_targets(t, now="2026-11-21T06:00:00Z")
+    assert "3 targets · 3 matches · paper only" in msg
+    lines = msg.split("\n")
+    sat, sun = lines.index("📅 <b>SATURDAY 21 NOV</b>"), lines.index("📅 <b>SUNDAY 22 NOV</b>")
+    epl_sat = lines.index("<b>🏴󠁧󠁢󠁥󠁮󠁧󠁿 PREMIER LEAGUE</b>")
+    assert sat < epl_sat < lines.index("<b>🇪🇸 LA LIGA</b>") < sun   # Premier League before La Liga
+    assert "<b>14:30</b>  Brighton &amp; Hove v Fulham" in msg          # SA time, HTML-escaped
+    assert "<code>  #58   Under 2.5 ≥  2.84   Pin 2.60</code>" in msg
     assert "No realistic targets" in format_targets(t.iloc[:0], now="2026-11-22T06:00:00Z")
 
 
@@ -221,7 +231,7 @@ class FakeBot:
     def updates(self, offset=None):
         return [u for u in self._updates if offset is None or u["update_id"] >= offset]
 
-    def send(self, text, chat_id=None, reply_to=None):
+    def send(self, text, chat_id=None, reply_to=None, html=False):
         self.sent.append((text, reply_to))
         return [len(self.sent)]
 
@@ -305,7 +315,7 @@ def test_monday_run_also_sends_weekly_summary():
     store, bot = FakeStore(), FakeBot()
     daily_picks.run(_args(), store=store, bot=bot, client=FakeOdds([]), history=_history_frames(),
                     now="2026-11-23T06:00:00Z", log=lambda m: None)   # a Monday
-    assert len(bot.sent) == 2 and "Weekly summary" in bot.sent[1][0]
+    assert len(bot.sent) == 2 and "WEEKLY SUMMARY" in bot.sent[1][0]
 
 
 # ---- /took ---------------------------------------------------------------------------------
@@ -365,13 +375,14 @@ def test_settle_fetches_closing_settles_and_posts():
     assert (pick["status"], pick["profit_units"]) == ("won", pytest.approx(1.75))
     assert store.matches[1]["home_goals"] == 1
     assert sum(s.get("is_closing", False) for s in store.snaps) == 2
-    assert len(settled) == 1 and "🏁 Settled" in bot.sent[-1][0] and "+1.75u" in bot.sent[-1][0]
+    assert len(settled) == 1 and "🏁 <b>SETTLED</b>" in bot.sent[-1][0] and "+1.75u" in bot.sent[-1][0]
 
 
 def test_format_settled_handles_void():
     rows = pd.DataFrame([{"status": "void", "home": "A", "away": "B", "home_goals": None, "away_goals": None,
                           "outcome": "H", "odds": 2.0, "profit_units": None, "clv": None}])
-    assert "➖ A v B · Home win @ 2.00 · +0.00u" in format_settled(rows)
+    msg = format_settled(rows)
+    assert "➖ <b>A v B</b>\n     Home win @ 2.00 · <b>+0.00u</b>" in msg
 
 
 def test_picks_frame_flattens_embedded_match():

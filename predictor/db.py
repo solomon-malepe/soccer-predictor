@@ -142,6 +142,20 @@ class Store:
     def upsert_targets(self, rows: list[dict]) -> list[dict]:
         return self.db.insert("targets", rows, on_conflict="match_id,market,outcome")
 
+    def targets(self, since=None) -> list[dict]:
+        """Targets posted since `since` (any timestamp), with match info."""
+        filters = {"order": "posted_at.desc"}
+        if since is not None:
+            filters["posted_at"] = f"gte.{pd.Timestamp(since).isoformat()}"
+        return self.db.select("targets", f"*,{MATCH_EMBED}", **filters)
+
+    def counts(self) -> dict[str, int]:
+        """Row count per table (for the dashboard's system panel)."""
+        out = {}
+        for t in ("matches", "odds_snapshots", "predictions", "targets", "picks"):
+            out[t] = len(self.db.select(t, "id"))
+        return out
+
     def target(self, target_id: int) -> dict | None:
         rows = self.db.select("targets", f"*,{MATCH_EMBED}", id=f"eq.{target_id}")
         return rows[0] if rows else None

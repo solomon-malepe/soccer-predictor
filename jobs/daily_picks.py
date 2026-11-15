@@ -109,9 +109,9 @@ def run(args, store=None, bot=None, client=None, history=None, now=None, log=pri
         targets["id"] = range(1, len(targets) + 1)   # dry run: placeholder numbers
     message = format_targets(targets, now)
     if bot is not None:
-        bot.send(message)
+        bot.send(message, html=True)
         if now.tz_convert("Africa/Johannesburg").day_of_week == 0 and store is not None:
-            bot.send(weekly_summary(store, now))
+            bot.send(weekly_summary(store, now), html=True)
     return message
 
 

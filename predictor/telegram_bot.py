@@ -10,6 +10,7 @@ next time a job runs (morning and night). Telegram keeps unread messages 24 hour
 from __future__ import annotations
 
 import json
+from html import escape
 import os
 import re
 import urllib.error
@@ -67,11 +68,14 @@ class Bot:
             raise TelegramError(f"Telegram {method} failed (HTTP {status}): {desc}")
         return body["result"]
 
-    def send(self, text: str, chat_id: str | None = None, reply_to: int | None = None) -> list[int]:
+    def send(self, text: str, chat_id: str | None = None, reply_to: int | None = None,
+             html: bool = False) -> list[int]:
         ids = []
         for part in split_message(text):
             payload = {"chat_id": chat_id or self.chat_id, "text": part,
                        "disable_web_page_preview": True}
+            if html:
+                payload["parse_mode"] = "HTML"
             if reply_to:
                 payload["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
             ids.append(self._call("sendMessage", payload)["message_id"])
@@ -141,24 +145,43 @@ def _sast(ts) -> pd.Timestamp:
     return (t.tz_localize("UTC") if t.tzinfo is None else t).tz_convert(SAST)
 
 
+LEAGUE_HEADERS = {"E0": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 PREMIER LEAGUE", "SP1": "🇪🇸 LA LIGA", "I1": "🇮🇹 SERIE A",
+                  "D1": "🇩🇪 BUNDESLIGA", "F1": "🇫🇷 LIGUE 1"}
+LEAGUE_ORDER = ["E0", "SP1", "I1", "D1", "F1"]
+SHORT = {"H": "Home", "D": "Draw", "A": "Away", "O25": "Over 2.5", "U25": "Under 2.5"}
+
+
 def format_targets(targets: pd.DataFrame, now=None) -> str:
-    """Morning message. `targets` needs id, kickoff, home, away, outcome, target_odds, pin_odds."""
+    """Morning message (Telegram HTML): grouped by day, then league, then match.
+    `targets` needs id, league, kickoff, home, away, outcome, target_odds, pin_odds."""
     now = _sast(now if now is not None else pd.Timestamp.now(tz="UTC"))
-    head = f"⚽ Value targets · {now.strftime('%a %d %b')}"
+    head = f"⚽ <b>VALUE TARGETS</b> · {now.strftime('%a %d %b')}"
     if targets.empty:
         return head + "\n\nNo realistic targets today. That's normal; most days have few or none."
-    lines = [head, ""]
-    for (ko, home, away), g in targets.sort_values(["kickoff", "home"]).groupby(
-            ["kickoff", "home", "away"], sort=False):
-        lines.append(f"{_sast(ko).strftime('%a %H:%M')}  {home} v {away}")
-        for _, t in g.iterrows():
-            lines.append(f"  #{int(t['id'])}  {LABELS[t['outcome']]}: bet if ≥ {t['target_odds']:.2f}"
-                         f"  (Pinnacle {t['pin_odds']:.2f})")
-    lines += ["",
-              "If Betway or SportyBet offers the price or better: 1 unit, ONE bet per match.",
-              "Then reply: /took <number> <price> <book>   e.g. /took 57 2.90 sportybet",
-              "Most targets won't be on offer; a real one turns up about once a week.",
-              "PAPER ONLY until 150 picks show positive CLV."]
+    t = targets.copy()
+    t["ko"] = t["kickoff"].map(_sast)
+    t["day"] = t["ko"].map(lambda x: x.strftime("%A %d %b"))
+    t["lg_order"] = t["league"].map(lambda lg: LEAGUE_ORDER.index(lg) if lg in LEAGUE_ORDER else 9)
+    t = t.sort_values(["ko", "lg_order", "home", "over_pinnacle" if "over_pinnacle" in t else "id"])
+    n_matches = t.groupby(["home", "away"]).ngroups
+    lines = [head, f"{len(t)} targets · {n_matches} matches · paper only", ""]
+    multi_day = t["day"].nunique() > 1
+    for day, d in t.groupby("day", sort=False):
+        if multi_day:
+            lines += [f"📅 <b>{escape(day.upper())}</b>", ""]
+        for lg, g in sorted(d.groupby("league"), key=lambda x: LEAGUE_ORDER.index(x[0])
+                            if x[0] in LEAGUE_ORDER else 9):
+            lines.append(f"<b>{LEAGUE_HEADERS.get(lg, lg)}</b>")
+            for (ko, home, away), m in g.groupby(["ko", "home", "away"], sort=False):
+                lines.append(f"<b>{ko.strftime('%H:%M')}</b>  {escape(home)} v {escape(away)}")
+                for _, r in m.iterrows():
+                    lines.append(f"<code>  #{int(r['id']):<4} {SHORT[r['outcome']]:<9} ≥ {r['target_odds']:>5.2f}"
+                                 f"   Pin {r['pin_odds']:.2f}</code>")
+            lines.append("")
+    lines += ["<b>How to use</b>",
+              "If Betway or SportyBet shows the target or higher, bet 1 unit (one bet per match) and reply:",
+              "<code>/took 57 2.90 sportybet</code>",
+              "<i>Most targets won't be on offer; a real one turns up about once a week.</i>"]
     return "\n".join(lines)
 
 
@@ -169,32 +192,37 @@ def format_pick_logged(user: str, target: dict, odds: float, book: str) -> str:
 
 
 def format_weekly_summary(picks: pd.DataFrame, all_picks: pd.DataFrame, gate: str) -> str:
-    """Monday message: last 7 days plus all-time record."""
-    def line(df: pd.DataFrame, label: str) -> str:
-        done = df[df["status"].isin(["won", "lost"])]
+    """Monday message (Telegram HTML): last 7 days plus all-time record."""
+    def block(df: pd.DataFrame, label: str) -> list[str]:
+        done = df[df["status"].isin(["won", "lost"])] if len(df) else df
         if done.empty:
-            return f"{label}: no settled picks"
+            return [f"<b>{label}</b>", "  no settled picks yet"]
         units = pd.to_numeric(done["profit_units"], errors="coerce").sum()
         clv = pd.to_numeric(df["clv"], errors="coerce").dropna()
-        won = (done["status"] == "won").sum()
-        clv_txt = f", avg CLV {clv.mean():+.1%} ({len(clv)})" if len(clv) else ""
-        return (f"{label}: {len(done)} settled, {won} won, {units:+.2f} units, "
-                f"ROI {units / len(done):+.1%}{clv_txt}")
+        won = int((done["status"] == "won").sum())
+        rows = [f"<b>{label}</b>",
+                f"<code>  Picks   {len(done):>4}   won {won}</code>",
+                f"<code>  Units   {units:>+7.2f}</code>",
+                f"<code>  ROI     {units / len(done):>+7.1%}</code>"]
+        if len(clv):
+            rows.append(f"<code>  CLV     {clv.mean():>+7.1%}   ({len(clv)} with close)</code>")
+        return rows
 
     open_n = int((all_picks["status"] == "open").sum()) if len(all_picks) else 0
-    return "\n".join(["📊 Weekly summary", line(picks, "Last 7 days"), line(all_picks, "All time"),
-                      f"Open picks: {open_n}", gate,
-                      "CLV is what counts. Profit over a few dozen bets is mostly luck."])
+    return "\n".join(["📊 <b>WEEKLY SUMMARY</b>", "", *block(picks, "Last 7 days"), "",
+                      *block(all_picks, "All time"), "", f"Open picks: {open_n}", escape(gate), "",
+                      "<i>CLV is what counts. Profit over a few dozen bets is mostly luck.</i>"])
 
 
 def format_settled(rows: pd.DataFrame) -> str:
-    lines = ["🏁 Settled"]
+    """Night message (Telegram HTML): one line per settled pick."""
+    lines = ["🏁 <b>SETTLED</b>", ""]
     for _, r in rows.iterrows():
         mark = {"won": "✅", "lost": "❌", "void": "➖"}.get(r["status"], "")
         clv = f" · CLV {float(r['clv']):+.1%}" if pd.notna(r.get("clv")) else ""
         score = (f" {int(r['home_goals'])}-{int(r['away_goals'])}"
                  if pd.notna(r.get("home_goals")) and pd.notna(r.get("away_goals")) else "")
         profit = float(r["profit_units"]) if pd.notna(r.get("profit_units")) else 0.0
-        lines.append(f"{mark} {r['home']} v {r['away']}{score} · "
-                     f"{LABELS[r['outcome']]} @ {float(r['odds']):.2f} · {profit:+.2f}u{clv}")
+        lines.append(f"{mark} <b>{escape(str(r['home']))} v {escape(str(r['away']))}</b>{score}")
+        lines.append(f"     {LABELS[r['outcome']]} @ {float(r['odds']):.2f} · <b>{profit:+.2f}u</b>{clv}")
     return "\n".join(lines)
