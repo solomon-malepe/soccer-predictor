@@ -1,0 +1,82 @@
+name: Daily targets and settle
+
+on:
+  schedule:
+    - cron: "0 6 * * *"     # 08:00 SAST: read /took replies, post today's targets (+ Monday summary)
+    - cron: "30 21 * * *"   # 23:30 SAST: read /took replies, closing odds, settle results
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Which job to run
+        type: choice
+        options: [picks, settle, picks-dry-run]
+        default: picks-dry-run
+
+concurrency:
+  group: daily
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      # Old football-data seasons, OddsPapi team names and the request counter
+      # survive between runs, saving downloads and API requests.
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/raw
+            data/oddspapi/participants.json
+            data/oddspapi/usage.json
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+
+      - name: Choose job
+        id: which
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "30 21 * * *" ]; then echo "job=settle" >> "$GITHUB_OUTPUT";
+            else echo "job=picks" >> "$GITHUB_OUTPUT"; fi
+          else
+            echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Morning targets
+        if: steps.which.outputs.job == 'picks'
+        run: python -m jobs.daily_picks
+
+      - name: Dry run (next 7 days, nothing saved or sent)
+        if: steps.which.outputs.job == 'picks-dry-run'
+        run: python -m jobs.daily_picks --dry-run --hours 168
+
+      - name: Settle
+        if: steps.which.outputs.job == 'settle'
+        run: python -m jobs.settle
+
+      # The jobs send their own alert with the error. This catches failures before
+      # they start (install, cache), so nothing fails silently.
+      - name: Alert on setup failure
+        if: failure() && steps.which.outputs.job == '' && env.TELEGRAM_ADMIN_CHAT_ID != ''
+        run: |
+          curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_ADMIN_CHAT_ID}" \
+            --data-urlencode "text=⚠️ Daily workflow failed before the job started: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /dev/null
