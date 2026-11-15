@@ -72,8 +72,11 @@ class Supabase:
         url = f"{self.url}/rest/v1/{table}"
         if params:
             url += "?" + urllib.parse.urlencode(params, safe="(),!:*.")
-        headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}",
-                   "Content-Type": "application/json", "Accept": "application/json"}
+        headers = {"apikey": self.key, "Content-Type": "application/json", "Accept": "application/json"}
+        if not self.key.startswith("sb_"):
+            # legacy service_role keys are JWTs and also go in Authorization;
+            # new sb_secret_ keys are not JWTs and only go in apikey
+            headers["Authorization"] = f"Bearer {self.key}"
         if prefer:
             headers["Prefer"] = prefer
         data = None

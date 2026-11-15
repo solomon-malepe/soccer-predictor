@@ -65,6 +65,10 @@ def test_supabase_requests_are_shaped_for_postgrest():
     assert "resolution=ignore-duplicates" in h["Prefer"]
     assert body == [{"name": "Arsenal", "league": "E0", "x": None}]   # NaN -> null
 
+    new_style = Supabase(url="https://x.supabase.co", key="sb_secret_abc", fetch=fake)
+    new_style.select("teams")
+    assert calls[-1][2]["apikey"] == "sb_secret_abc" and "Authorization" not in calls[-1][2]
+
     db.update("picks", {"status": "won"}, id="eq.7")
     assert calls[-1][0] == "PATCH" and calls[-1][1].endswith("/picks?id=eq.7")
     Store(db).picks(status="neq.void")
