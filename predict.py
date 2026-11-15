@@ -1,7 +1,14 @@
 """Price upcoming matches and list value picks.
 
-Uses football-data.co.uk/fixtures.csv for the fixture list and its odds
-(Pinnacle + soft books). To use YOUR Betway / SportyBet prices instead, pass
+Live mode (recommended): fixtures and Pinnacle odds come from OddsPapi, and you
+type only Betway + SportyBet prices.
+
+    python predict.py --league E0 SP1 I1 D1 F1 --live --write-template my_odds.csv
+    #   ...fill in Betway / SportyBet prices in my_odds.csv...
+    python predict.py --league E0 SP1 I1 D1 F1 --live --my-odds my_odds.csv
+
+Without --live, football-data.co.uk/fixtures.csv gives the fixture list and its
+odds. To use YOUR Betway / SportyBet prices instead, pass
 --my-odds with a CSV like my_odds_template.csv:
 
     home,away,book,H,D,A,O25,U25
@@ -9,8 +16,9 @@ Uses football-data.co.uk/fixtures.csv for the fixture list and its odds
     Arsenal,Chelsea,SportyBet,2.15,3.30,3.45,2.05,1.78
     Arsenal,Chelsea,Pinnacle,2.20,3.45,3.60,2.02,1.88
 
-The Pinnacle row is required for the 'both' strategy: fixtures.csv has had no
-Pinnacle odds since January 2026.
+Without --live the Pinnacle row is required for the 'both' strategy: fixtures.csv
+has had no Pinnacle odds since January 2026. With --live a Pinnacle row is optional
+and overrides the API price.
 
 Team names must match football-data's spelling (e.g. "Man United", "Nott'm Forest").
 
@@ -66,6 +74,23 @@ def apply_my_odds(fixtures: pd.DataFrame, my_odds: pd.DataFrame) -> pd.DataFrame
     return fx
 
 
+def write_template(fixtures: pd.DataFrame, path: str) -> None:
+    """Blank odds sheet: one Betway and one SportyBet row per fixture, names already
+    in football-data spelling, kickoff in SA time."""
+    out = Path(path)
+    if out.exists():
+        raise SystemExit(f"{out} already exists. Delete or rename it first so typed odds aren't overwritten.")
+    rows = []
+    for _, r in fixtures.iterrows():
+        ko = pd.Timestamp(r["kickoff"]).tz_convert("Africa/Johannesburg").strftime("%a %d %b %H:%M")
+        for book in ("Betway", "SportyBet"):
+            rows.append({"league": r["league"], "kickoff_sast": ko, "home": r["home"],
+                         "away": r["away"], "book": book, **{o: "" for o in OUTCOMES}})
+    pd.DataFrame(rows, columns=["league", "kickoff_sast", "home", "away", "book", *OUTCOMES]).to_csv(out, index=False)
+    print(f"Wrote {len(rows)} rows ({len(fixtures)} matches) to {out}. Fill in the prices; "
+          f"leave a cell blank if the book doesn't offer it.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--league", nargs="+", default=["E0"], choices=list(LEAGUES))
@@ -73,6 +98,11 @@ def main() -> None:
     ap.add_argument("--soft-books", nargs="+", default=DEFAULT_SOFT_BOOKS)
     ap.add_argument("--my-odds", help="CSV with your own Betway/SportyBet prices")
     ap.add_argument("--fixtures-file", help="use a local fixtures.csv instead of downloading")
+    ap.add_argument("--live", action="store_true",
+                    help="fixtures + Pinnacle odds from OddsPapi (needs ODDS_API_KEY in .env)")
+    ap.add_argument("--days", type=float, default=7, help="--live: how many days ahead to price")
+    ap.add_argument("--write-template", metavar="CSV",
+                    help="--live: write a blank Betway/SportyBet odds sheet for the fixtures, then stop")
     ap.add_argument("--strategy", default="both", choices=["model", "pinnacle", "both", "blend"])
     ap.add_argument("--min-edge", type=float, default=0.05)
     # Locked in Phase 1 (2026-11-15): both, model >=5%, Pinnacle >=2%, odds 1.30-5.00
@@ -87,7 +117,33 @@ def main() -> None:
 
     end = current_season_start_year()
     seasons = season_codes(end - args.history_seasons + 1, end)
-    fixtures_all = load_fixtures(args.league, soft_books=args.soft_books, path=args.fixtures_file)
+    if args.write_template and not args.live:
+        ap.error("--write-template needs --live")
+
+    history = {}
+    for league in args.league:
+        # current season is always re-downloaded so the latest results are included
+        hist = load_seasons(league, seasons[:-1], cache_dir=args.data_dir, soft_books=args.soft_books)
+        cur = load_seasons(league, seasons[-1:], cache_dir=args.data_dir,
+                           soft_books=args.soft_books, refresh=not args.offline)
+        history[league] = (hist, cur)
+
+    if args.live:
+        from predictor.odds_feed import OddsPapi, live_fixtures
+        client = OddsPapi()
+        fd_names = {lg: sorted(set(cur["home"]) | set(cur["away"])) for lg, (_, cur) in history.items()}
+        fixtures_all, unmatched = live_fixtures(client, args.league, fd_names, days=args.days)
+        for u in unmatched:
+            print(f"WARNING: no football-data name for OddsPapi team {u}. Add it to ALIASES in predictor/teams.py")
+        print(f"OddsPapi: {len(fixtures_all)} fixtures in the next {args.days:g} days. "
+              f"Requests this run: {client.calls}, this month: {client.month_usage()}/250")
+        if args.write_template:
+            write_template(fixtures_all, args.write_template)
+            return
+        if not args.my_odds:
+            print("Note: --live gives Pinnacle only. Add --my-odds with your Betway/SportyBet prices to get picks.")
+    else:
+        fixtures_all = load_fixtures(args.league, soft_books=args.soft_books, path=args.fixtures_file)
     if args.my_odds:
         fixtures_all = apply_my_odds(fixtures_all, pd.read_csv(args.my_odds))
     if args.strategy != "model" and len(fixtures_all):
@@ -101,12 +157,9 @@ def main() -> None:
 
     rows, picks = [], []
     for league in args.league:
-        # current season is always re-downloaded so the latest results are included
-        hist = load_seasons(league, seasons[:-1], cache_dir=args.data_dir, soft_books=args.soft_books)
-        cur = load_seasons(league, seasons[-1:], cache_dir=args.data_dir,
-                           soft_books=args.soft_books, refresh=not args.offline)
+        hist, cur = history[league]
         model = DixonColes(ridge=args.ridge).fit(pd.concat([hist, cur], ignore_index=True))
-        fx = fixtures_all[fixtures_all["league"] == league]
+        fx = fixtures_all[fixtures_all["league"] == league] if len(fixtures_all) else fixtures_all
         print(f"\n=== {LEAGUES[league]}: {len(fx)} upcoming matches ===")
         for _, r in fx.iterrows():
             if not (model.knows(r["home"], 5) and model.knows(r["away"], 5)):
@@ -122,7 +175,8 @@ def main() -> None:
             rows.append(rec)
             bet = select_bet(r, {o: p[o] for o in OUTCOMES}, cfg)
             if bet:
-                picks.append({**{k: rec[k] for k in ("league", "date", "home", "away")}, **bet})
+                extra = {k: r[k] for k in ("fixture_id", "kickoff") if k in r and pd.notna(r[k])}
+                picks.append({**{k: rec[k] for k in ("league", "date", "home", "away")}, **extra, **bet})
 
     if not rows:
         print("No matches priced.")

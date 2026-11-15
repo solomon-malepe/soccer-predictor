@@ -1,7 +1,9 @@
 """Paper-trading log: record picks, settle them from results, measure CLV.
 
-The log is a plain CSV (paper_log.csv) you can open in VS Code / Excel. The only
-columns you fill in by hand are the Pinnacle closing odds for the pick's market:
+The log is a plain CSV (paper_log.csv) you can open in VS Code / Excel. With an
+ODDS_API_KEY in .env, `paper.py settle` fetches Pinnacle's closing odds itself.
+Without one (or if a match can't be found) you type them into the columns for
+the pick's market:
 
     1X2 picks:      close_H, close_D, close_A
     Over/Under 2.5: close_O25, close_U25
@@ -25,7 +27,7 @@ from .value import MARKET_GROUPS, devig
 CLOSE_COLS = {o: f"close_{o}" for o in ["H", "D", "A", "O25", "U25"]}
 
 LOG_COLUMNS = [
-    "logged_at", "league", "date", "home", "away", "market", "outcome", "book", "odds",
+    "logged_at", "league", "date", "home", "away", "fixture_id", "kickoff", "market", "outcome", "book", "odds",
     "p_model", "p_pin", "edge_model", "edge_pin", "stake",
     *CLOSE_COLS.values(),
     "hg", "ag", "status", "profit", "clv",
@@ -114,6 +116,51 @@ def settle_log(log: pd.DataFrame, results: pd.DataFrame, max_days: int = 4) -> t
     for c in ("hg", "ag"):
         log[c] = pd.to_numeric(log[c], errors="coerce").astype("Int64")
     return log, settled
+
+
+def missing_close(row) -> bool:
+    group = MARKET_GROUPS.get(row["market"], [])
+    return any(pd.isna(pd.to_numeric(row.get(CLOSE_COLS[o]), errors="coerce")) for o in group)
+
+
+def fill_closing(log: pd.DataFrame, client, fd_names: dict[str, list[str]],
+                 now: pd.Timestamp | None = None, log_fn=print) -> tuple[pd.DataFrame, int]:
+    """Fetch Pinnacle closing odds from OddsPapi for picks that have kicked off and
+    still lack them. Prices you typed in yourself are never overwritten."""
+    from .odds_feed import OddsPapiError, closing_from_history, find_fixture_id
+
+    log = log.copy()
+    now = now if now is not None else pd.Timestamp.now(tz="UTC")
+    filled = 0
+    for i, r in log.iterrows():
+        if r["status"] == "void" or not missing_close(r):
+            continue
+        ko = pd.Timestamp(r["kickoff"]) if pd.notna(r.get("kickoff")) else None
+        if ko is not None and ko.tzinfo is None:
+            ko = ko.tz_localize("UTC")
+        if (ko is not None and ko > now) or (ko is None and pd.Timestamp(r["date"]).date() >= now.date()):
+            continue   # not kicked off yet
+        try:
+            fid = r.get("fixture_id")
+            if pd.isna(fid) or not fid or ko is None:
+                fid, start = find_fixture_id(client, r["league"], r["date"], r["home"], r["away"],
+                                             fd_names.get(r["league"], []))
+                if not fid:
+                    log_fn(f"  closing odds: couldn't find {r['home']} vs {r['away']} on OddsPapi")
+                    continue
+                ko = pd.Timestamp(start)
+                log.at[i, "fixture_id"], log.at[i, "kickoff"] = fid, ko.isoformat()
+            close = closing_from_history(client.history(fid), ko)
+        except OddsPapiError as e:
+            log_fn(f"  closing odds: {e}")
+            break
+        got = False
+        for o, price in close.items():
+            if np.isfinite(price) and pd.isna(pd.to_numeric(log.at[i, CLOSE_COLS[o]], errors="coerce")):
+                log.at[i, CLOSE_COLS[o]] = price
+                got = True
+        filled += got
+    return log, filled
 
 
 def _stats(g: pd.DataFrame) -> pd.Series:

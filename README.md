@@ -98,23 +98,34 @@ Team names must match football-data's spelling (`Man United`, `Nott'm Forest`,
 Add a `Pinnacle` row for each match too. football-data stopped publishing Pinnacle
 odds in January 2026, and the `both` rule can't pick a match without them.
 
-### Paper trading (Phase 2)
+### Paper trading (Phase 2) with live Pinnacle odds (Phase 3)
+
+Put your OddsPapi key in `.env` as `ODDS_API_KEY=...` (free tier: 250 requests
+a month; a normal week uses about 5). OddsPapi supplies fixtures and Pinnacle
+odds. Its Betway feed is betway.com, not Betway SA, so you still type Betway and
+SportyBet prices.
 
 Every matchday:
 
 ```bash
-python predict.py --league E0 SP1 I1 D1 F1 --my-odds my_odds.csv
+# 1. blank odds sheet with this week's fixtures, names already spelled right
+python predict.py --league E0 SP1 I1 D1 F1 --live --write-template my_odds.csv
+# 2. fill in Betway + SportyBet prices, then:
+python predict.py --league E0 SP1 I1 D1 F1 --live --my-odds my_odds.csv
 python paper.py add        # copies results/picks.csv into paper_log.csv
 ```
 
-Just before kickoff, type Pinnacle's closing odds into `paper_log.csv`
-(`close_H`/`close_D`/`close_A` for 1X2 picks, `close_O25`/`close_U25` for
-Over/Under). After the games:
+After the games:
 
 ```bash
-python paper.py settle     # scores from football-data, profit, CLV
+python paper.py settle     # scores from football-data, Pinnacle closing odds, CLV
 python paper.py report     # record + progress towards the 150-pick gate
 ```
+
+Without an API key, add a `Pinnacle` row per match to `my_odds.csv` and type
+Pinnacle's closing odds into `paper_log.csv` (`close_H`/`close_D`/`close_A` or
+`close_O25`/`close_U25`). If OddsPapi names a team that isn't mapped yet (a newly
+promoted club), predict.py warns you; add it to `ALIASES` in `predictor/teams.py`.
 
 You can correct `odds` if you got a different price, or set `status` to `void`
 for a postponed match. Commit `paper_log.csv` so the record is kept honestly.
