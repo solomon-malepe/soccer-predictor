@@ -95,6 +95,30 @@ python predict.py --my-odds my_odds.csv
 Team names must match football-data's spelling (`Man United`, `Nott'm Forest`,
 `Wolves`, ...). Check `results/upcoming.csv` for the exact names.
 
+Add a `Pinnacle` row for each match too. football-data stopped publishing Pinnacle
+odds in January 2026, and the `both` rule can't pick a match without them.
+
+### Paper trading (Phase 2)
+
+Every matchday:
+
+```bash
+python predict.py --league E0 SP1 I1 D1 F1 --my-odds my_odds.csv
+python paper.py add        # copies results/picks.csv into paper_log.csv
+```
+
+Just before kickoff, type Pinnacle's closing odds into `paper_log.csv`
+(`close_H`/`close_D`/`close_A` for 1X2 picks, `close_O25`/`close_U25` for
+Over/Under). After the games:
+
+```bash
+python paper.py settle     # scores from football-data, profit, CLV
+python paper.py report     # record + progress towards the 150-pick gate
+```
+
+You can correct `odds` if you got a different price, or set `status` to `void`
+for a postponed match. Commit `paper_log.csv` so the record is kept honestly.
+
 ## Staking
 
 Picks are in **units**. Each person decides what 1 unit is (1-2% of the money

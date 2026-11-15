@@ -133,6 +133,8 @@ def main() -> None:
     print(f"\nFull probabilities and fair odds for every market saved to {args.out}")
 
     if not picks:
+        # don't leave an old picks.csv behind for `paper.py add` to pick up
+        Path(args.out).with_name("picks.csv").unlink(missing_ok=True)
         print(f"\nNo value picks today under the '{args.strategy}' rule. That's normal; most games have none.")
         return
     print(f"\n*** Value picks ({args.strategy}, min edge {args.min_edge:.0%}) ***")
