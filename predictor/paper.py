@@ -24,7 +24,7 @@ import pandas as pd
 from .backtest import settle as outcome_won
 from .value import MARKET_GROUPS, devig
 
-CLOSE_COLS = {o: f"close_{o}" for o in ["H", "D", "A", "O25", "U25"]}
+CLOSE_COLS = {o: f"close_{o}" for outs in MARKET_GROUPS.values() for o in outs}
 
 LOG_COLUMNS = [
     "logged_at", "league", "date", "home", "away", "fixture_id", "kickoff", "market", "outcome", "book", "odds",

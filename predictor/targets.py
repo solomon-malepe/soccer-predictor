@@ -25,7 +25,9 @@ import pandas as pd
 
 from .value import MARKET_GROUPS, StrategyConfig, devig
 
-LABELS = {"H": "Home win", "D": "Draw", "A": "Away win", "O25": "Over 2.5", "U25": "Under 2.5"}
+LABELS = {"H": "Home win", "D": "Draw", "A": "Away win", "O25": "Over 2.5", "U25": "Under 2.5",
+          "BTTS_Y": "Both teams score", "BTTS_N": "Not both score",
+          "O15": "Over 1.5", "U15": "Under 1.5", "O35": "Over 3.5", "U35": "Under 3.5"}
 
 
 def target_price(p_model: float, p_pin: float, cfg: StrategyConfig) -> float:

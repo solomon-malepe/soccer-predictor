@@ -17,10 +17,9 @@ from predictor.db import picks_frame
 from predictor.odds_feed import OddsPapi, OddsPapiError, closing_from_history
 from predictor.paper import closing_clv
 from predictor.telegram_bot import format_settled
+from predictor.value import MARKET_OF
 
 from .common import load_history, process_took
-
-MARKET_OF = {"H": "1X2", "D": "1X2", "A": "1X2", "O25": "OU25", "U25": "OU25"}
 
 
 def fetch_closing(store, client, picks: pd.DataFrame, now: pd.Timestamp, log=print) -> int:

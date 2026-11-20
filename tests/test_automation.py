@@ -196,8 +196,9 @@ class FakeStore:
         t = self.targets.get(tid)
         return {**t, "matches": self._embed(t["match_id"])} if t else None
 
-    def add_pick(self, row):
-        if any(p["match_id"] == row["match_id"] for p in self.picks_.values()):
+    def add_pick(self, row):   # one pick per match per track, as after migration 002
+        if any(p["match_id"] == row["match_id"] and p.get("strategy") == row.get("strategy")
+               for p in self.picks_.values()):
             return None
         pid = len(self.picks_) + 1
         self.picks_[pid] = {**row, "id": pid, "closing_odds": None, "clv": None, "profit_units": None}

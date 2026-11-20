@@ -22,6 +22,9 @@ def settle(outcome: str, hg: int, ag: int) -> bool:
     return {
         "H": hg > ag, "D": hg == ag, "A": hg < ag,
         "O25": hg + ag > 2.5, "U25": hg + ag < 2.5,
+        "O15": hg + ag > 1.5, "U15": hg + ag < 1.5,
+        "O35": hg + ag > 3.5, "U35": hg + ag < 3.5,
+        "BTTS_Y": hg > 0 and ag > 0, "BTTS_N": hg == 0 or ag == 0,
     }[outcome]
 
 

@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from .targets import LABELS
+from .value import is_experimental
 
 Fetch = Callable[[str, dict], tuple[int, object]]
 MAX_LEN = 3900          # Telegram's limit is 4096 characters per message
@@ -148,7 +149,10 @@ def _sast(ts) -> pd.Timestamp:
 LEAGUE_HEADERS = {"E0": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 PREMIER LEAGUE", "SP1": "🇪🇸 LA LIGA", "I1": "🇮🇹 SERIE A",
                   "D1": "🇩🇪 BUNDESLIGA", "F1": "🇫🇷 LIGUE 1"}
 LEAGUE_ORDER = ["E0", "SP1", "I1", "D1", "F1"]
-SHORT = {"H": "Home", "D": "Draw", "A": "Away", "O25": "Over 2.5", "U25": "Under 2.5"}
+SHORT = {"H": "Home", "D": "Draw", "A": "Away", "O25": "Over 2.5", "U25": "Under 2.5",
+         "BTTS_Y": "BTTS Yes", "BTTS_N": "BTTS No", "O15": "Over 1.5", "U15": "Under 1.5",
+         "O35": "Over 3.5", "U35": "Under 3.5"}
+EXP = "🧪"   # marks experimental (untested) markets
 
 
 def format_targets(targets: pd.DataFrame, now=None) -> str:
@@ -162,9 +166,12 @@ def format_targets(targets: pd.DataFrame, now=None) -> str:
     t["ko"] = t["kickoff"].map(_sast)
     t["day"] = t["ko"].map(lambda x: x.strftime("%A %d %b"))
     t["lg_order"] = t["league"].map(lambda lg: LEAGUE_ORDER.index(lg) if lg in LEAGUE_ORDER else 9)
-    t = t.sort_values(["ko", "lg_order", "home", "over_pinnacle" if "over_pinnacle" in t else "id"])
+    t["exp"] = t["market"].map(is_experimental) if "market" in t else False
+    t = t.sort_values(["ko", "lg_order", "home", "exp", "over_pinnacle" if "over_pinnacle" in t else "id"])
     n_matches = t.groupby(["home", "away"]).ngroups
-    lines = [head, f"{len(t)} targets · {n_matches} matches · paper only", ""]
+    n_exp = int(t["exp"].sum())
+    count = f"{len(t) - n_exp} targets" + (f" + {n_exp} {EXP}" if n_exp else "")
+    lines = [head, f"{count} · {n_matches} matches · paper only", ""]
     multi_day = t["day"].nunique() > 1
     for day, d in t.groupby("day", sort=False):
         if multi_day:
@@ -176,23 +183,32 @@ def format_targets(targets: pd.DataFrame, now=None) -> str:
                 lines.append(f"<b>{ko.strftime('%H:%M')}</b>  {escape(home)} v {escape(away)}")
                 for _, r in m.iterrows():
                     lines.append(f"<code>  #{int(r['id']):<4} {SHORT[r['outcome']]:<9} ≥ {r['target_odds']:>5.2f}"
-                                 f"   Pin {r['pin_odds']:.2f}</code>")
+                                 f"   Pin {r['pin_odds']:.2f}</code>" + (f" {EXP}" if r["exp"] else ""))
             lines.append("")
     lines += ["<b>How to use</b>",
-              "If Betway or SportyBet shows the target or higher, bet 1 unit (one bet per match) and reply:",
+              "1. Find the match on Betway or SportyBet.",
+              "2. If the odds are the number after ≥ or higher, bet 1 unit.",
+              "3. Reply here with the target number, the odds you got and the bookie:",
               "<code>/took 57 2.90 sportybet</code>",
-              "<i>Most targets won't be on offer; a real one turns up about once a week.</i>"]
+              "<i>One bet per match. Most targets won't be on offer; a real one turns up about once a week.</i>"]
+    if n_exp:
+        lines += ["", f"{EXP} <i>= experimental (BTTS, Over/Under 1.5 and 3.5). Never tested on past seasons, "
+                      "so these are scored separately and don't count towards the main record. "
+                      f"You can take one {EXP} per match on top of the main bet.</i>"]
     return "\n".join(lines)
 
 
 def format_pick_logged(user: str, target: dict, odds: float, book: str) -> str:
     m = target["matches"]
+    exp = f" {EXP} experimental" if is_experimental(target.get("market", "")) else ""
     return (f"✅ Logged for {user}: {m['home']['name']} v {m['away']['name']} · "
-            f"{LABELS[target['outcome']]} @ {odds:.2f} ({book}) · 1 unit (paper)")
+            f"{LABELS[target['outcome']]} @ {odds:.2f} ({book}) · 1 unit (paper){exp}")
 
 
-def format_weekly_summary(picks: pd.DataFrame, all_picks: pd.DataFrame, gate: str) -> str:
-    """Monday message (Telegram HTML): last 7 days plus all-time record."""
+def format_weekly_summary(picks: pd.DataFrame, all_picks: pd.DataFrame, gate: str,
+                          experimental: pd.DataFrame | None = None) -> str:
+    """Monday message (Telegram HTML): last 7 days plus all-time record (main track),
+    then the experimental track's all-time record if it has any picks."""
     def block(df: pd.DataFrame, label: str) -> list[str]:
         done = df[df["status"].isin(["won", "lost"])] if len(df) else df
         if done.empty:
@@ -209,8 +225,12 @@ def format_weekly_summary(picks: pd.DataFrame, all_picks: pd.DataFrame, gate: st
         return rows
 
     open_n = int((all_picks["status"] == "open").sum()) if len(all_picks) else 0
+    exp = []
+    if experimental is not None and len(experimental):
+        exp = ["", *block(experimental, f"{EXP} Experimental, all time"),
+               "<i>  BTTS and Over/Under 1.5/3.5. Not part of the main record.</i>"]
     return "\n".join(["📊 <b>WEEKLY SUMMARY</b>", "", *block(picks, "Last 7 days"), "",
-                      *block(all_picks, "All time"), "", f"Open picks: {open_n}", escape(gate), "",
+                      *block(all_picks, "All time"), "", f"Open picks: {open_n}", escape(gate), *exp, "",
                       "<i>CLV is what counts. Profit over a few dozen bets is mostly luck.</i>"])
 
 
@@ -224,5 +244,6 @@ def format_settled(rows: pd.DataFrame) -> str:
                  if pd.notna(r.get("home_goals")) and pd.notna(r.get("away_goals")) else "")
         profit = float(r["profit_units"]) if pd.notna(r.get("profit_units")) else 0.0
         lines.append(f"{mark} <b>{escape(str(r['home']))} v {escape(str(r['away']))}</b>{score}")
-        lines.append(f"     {LABELS[r['outcome']]} @ {float(r['odds']):.2f} · <b>{profit:+.2f}u</b>{clv}")
+        exp = f" {EXP}" if is_experimental(str(r.get("market", ""))) else ""
+        lines.append(f"     {LABELS[r['outcome']]} @ {float(r['odds']):.2f} · <b>{profit:+.2f}u</b>{clv}{exp}")
     return "\n".join(lines)

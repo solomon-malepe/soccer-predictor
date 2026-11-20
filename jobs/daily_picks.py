@@ -19,11 +19,12 @@ from predictor.odds_feed import MARKET_IDS, OddsPapi, live_fixtures
 from predictor.paper import gate_status, report
 from predictor.targets import all_targets
 from predictor.telegram_bot import format_targets, format_weekly_summary
+from predictor.value import MARKET_OF
 
-from .common import (ALL_LEAGUES, CFG, MODEL_VERSION, load_history, process_took, team_names)
+from .common import (ALL_LEAGUES, CFG, CFG_EXP, EXP_PER_MATCH, MODEL_VERSION, load_history,
+                     process_took, team_names)
 
 OUTCOMES = list(MARKET_IDS)
-MARKET_OF = {"H": "1X2", "D": "1X2", "A": "1X2", "O25": "OU25", "U25": "OU25"}
 
 
 def model_probs(history: dict, fixtures: pd.DataFrame, min_matches: int = 5, log=print):
@@ -55,7 +56,7 @@ def save(store, fixtures: pd.DataFrame, probs: dict, xg: dict, targets: pd.DataF
     for idx, r in priced.iterrows():
         mid = match_ids[r["fixture_id"]]
         snaps += [{"match_id": mid, "book": "pinnacle", "market": MARKET_OF[o], "outcome": o,
-                   "odds": r[f"pin_{o}"]} for o in OUTCOMES if pd.notna(r[f"pin_{o}"])]
+                   "odds": r[f"pin_{o}"]} for o in OUTCOMES if pd.notna(r.get(f"pin_{o}"))]
         preds.append({"match_id": mid, "model_version": MODEL_VERSION,
                       "probs": {k: round(float(v), 4) for k, v in probs[idx].items()},
                       "xg_home": round(float(xg[idx][0]), 2), "xg_away": round(float(xg[idx][1]), 2)})
@@ -79,13 +80,17 @@ def save(store, fixtures: pd.DataFrame, probs: dict, xg: dict, targets: pd.DataF
 def weekly_summary(store, now: pd.Timestamp) -> str:
     from predictor.db import picks_frame
 
-    allp = picks_frame(store.picks())
+    everything = picks_frame(store.picks())
+    is_exp = (everything["strategy"] == "experimental") if "strategy" in everything else None
+    allp = everything[~is_exp] if is_exp is not None else everything
+    exp = everything[is_exp] if is_exp is not None else None
     if allp.empty:
-        return format_weekly_summary(allp.assign(status=[]), allp.assign(status=[]),
-                                     gate_status(pd.Series({"with_clv": 0, "avg_clv": float("nan")})))
+        empty = allp.assign(status=pd.Series(dtype=str))
+        return format_weekly_summary(empty, empty,
+                                     gate_status(pd.Series({"with_clv": 0, "avg_clv": float("nan")})), exp)
     week = allp[pd.to_datetime(allp["kickoff"], utc=True) >= now - pd.Timedelta(days=7)]
     log = allp.rename(columns={"profit_units": "profit", "stake_units": "stake"})
-    return format_weekly_summary(week, allp, gate_status(report(log)["overall"]))
+    return format_weekly_summary(week, allp, gate_status(report(log)["overall"]), exp)
 
 
 def run(args, store=None, bot=None, client=None, history=None, now=None, log=print) -> str:
@@ -101,7 +106,9 @@ def run(args, store=None, bot=None, client=None, history=None, now=None, log=pri
     log(f"{len(fixtures)} matches in the next {args.hours:g}h. OddsPapi requests: {client.calls} "
         f"(month: {client.month_usage()})")
     probs, xg = model_probs(history, fixtures, log=log)
-    targets = all_targets(fixtures, probs, CFG)
+    targets = pd.concat([all_targets(fixtures, probs, CFG),
+                         all_targets(fixtures, probs, CFG_EXP, per_match=EXP_PER_MATCH)],
+                        ignore_index=True)
     season = next(iter(history.values()))[1]["season"].iloc[0] if history else None
     if store is not None and len(probs):
         targets = save(store, fixtures, probs, xg, targets, season)

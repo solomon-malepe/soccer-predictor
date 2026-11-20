@@ -14,6 +14,8 @@ from predictor.teams import map_names, match_team
 
 DATA = Path(__file__).parent / "data"
 
+MAIN = ["H", "D", "A", "O25", "U25"]
+
 
 def _price(p, active=True, ts="2026-11-15T10:00:00Z"):
     return {"players": {"0": {"price": p, "active": active, "changedAt": ts}}}
@@ -93,7 +95,9 @@ def test_unknown_team_is_not_guessed():
 # ---- parsing ---------------------------------------------------------------------------
 def test_extract_prices_and_inactive_outcomes():
     m = _markets(1.77, 4.13, 4.31, 1.53, 2.59)
-    assert extract_prices(m) == pytest.approx({"H": 1.77, "D": 4.13, "A": 4.31, "O25": 1.53, "U25": 2.59})
+    p = extract_prices(m)
+    assert {o: p[o] for o in MAIN} == pytest.approx({"H": 1.77, "D": 4.13, "A": 4.31, "O25": 1.53, "U25": 2.59})
+    assert all(np.isnan(p[o]) for o in p if o not in MAIN)      # markets the fixture doesn't carry
     m["1010"]["outcomes"]["1011"] = _price(2.59, active=False)
     del m["101"]["outcomes"]["102"]
     p = extract_prices(m)
@@ -102,7 +106,7 @@ def test_extract_prices_and_inactive_outcomes():
 
 def test_closing_price_is_last_before_kickoff():
     close = closing_from_history(HISTORY, "2026-11-22T16:30:00Z")
-    assert close == pytest.approx({"H": 1.75, "D": 4.20, "A": 4.40, "O25": 1.55, "U25": 2.50})
+    assert {o: close[o] for o in MAIN} == pytest.approx({"H": 1.75, "D": 4.20, "A": 4.40, "O25": 1.55, "U25": 2.50})
     early = closing_from_history(HISTORY, "2026-11-21T00:00:00Z")
     assert early["H"] == 1.80 and np.isnan(early["D"])
 

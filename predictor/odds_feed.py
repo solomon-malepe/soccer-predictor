@@ -29,7 +29,6 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from .data import OUTCOMES
 from .teams import map_names
 
 BASE_URL = "https://api.oddspapi.io/v4"
@@ -37,8 +36,13 @@ SOCCER = 10
 TOURNAMENTS = {"E0": 17, "SP1": 8, "I1": 23, "D1": 35, "F1": 34}
 LEAGUE_OF = {v: k for k, v in TOURNAMENTS.items()}
 # outcome -> (market id, outcome id); 101 = full-time 1X2, 1010 = total goals 2.5
+# outcome -> (OddsPapi marketId, outcomeId), from GET /markets?sportId=10
 MARKET_IDS = {"H": ("101", "101"), "D": ("101", "102"), "A": ("101", "103"),
-              "O25": ("1010", "1010"), "U25": ("1010", "1011")}
+              "O25": ("1010", "1010"), "U25": ("1010", "1011"),
+              # experimental markets; Pinnacle often posts these only a day or two before kickoff
+              "BTTS_Y": ("104", "104"), "BTTS_N": ("104", "105"),
+              "O15": ("108", "108"), "U15": ("108", "109"),
+              "O35": ("1012", "1012"), "U35": ("1012", "1013")}
 COOLDOWN_S = {"historical-odds": 5.0, "fixtures": 2.0}   # others: 1s
 FREE_MONTHLY = 250
 
@@ -220,7 +224,7 @@ def fixtures_frame(raw: list[dict], names: dict[str, str], fd_names: dict[str, l
             rec = {"date": ko.tz_convert(None).normalize(), "kickoff": ko, "league": lg,
                    "season": None, "home": h, "away": a, "hg": np.nan, "ag": np.nan,
                    "fixture_id": fx["fixtureId"]}
-            for o in OUTCOMES:
+            for o in MARKET_IDS:   # every market we read, including the experimental ones
                 rec[f"pin_{o}"] = prices[o]
                 rec[f"pinc_{o}"] = np.nan
                 rec[f"soft_{o}"] = np.nan

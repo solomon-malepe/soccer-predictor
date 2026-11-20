@@ -162,8 +162,14 @@ class Store:
 
     # picks
     def add_pick(self, row: dict) -> dict | None:
-        """Insert unless the match already has a pick (one pick per match)."""
-        out = self.db.insert("picks", row, on_conflict="match_id", ignore_duplicates=True)
+        """Insert unless the match already has a pick on this track (one per match per strategy).
+        Before migration 002 the database only allows one pick per match in total, so fall back."""
+        try:
+            out = self.db.insert("picks", row, on_conflict="match_id,strategy", ignore_duplicates=True)
+        except DBError as e:
+            if "42P10" not in str(e):   # 42P10: no unique constraint on (match_id, strategy) yet
+                raise
+            out = self.db.insert("picks", row, on_conflict="match_id", ignore_duplicates=True)
         return out[0] if out else None
 
     def picks(self, **filters) -> list[dict]:

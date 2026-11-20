@@ -1,2 +1,10 @@
 [browser]
 gatherUsageStats = false
+
+# Night-match look: dark pitch green with gold accents (the pitch background is CSS in app.py)
+[theme]
+base = "dark"
+primaryColor = "#f2c230"
+backgroundColor = "#0a1f14"
+secondaryBackgroundColor = "#123323"
+textColor = "#eef3ee"

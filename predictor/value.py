@@ -20,7 +20,18 @@ from scipy.optimize import brentq
 MARKET_GROUPS = {
     "1X2": ["H", "D", "A"],
     "OU25": ["O25", "U25"],
+    # Experimental (added 2026-11-20): never backtested, because football-data has no
+    # historical odds for them. Tracked separately so they can't muddy the main record.
+    "BTTS": ["BTTS_Y", "BTTS_N"],
+    "OU15": ["O15", "U15"],
+    "OU35": ["O35", "U35"],
 }
+EXPERIMENTAL_MARKETS = ("BTTS", "OU15", "OU35")
+MARKET_OF = {o: group for group, outs in MARKET_GROUPS.items() for o in outs}   # outcome -> market
+
+
+def is_experimental(market: str) -> bool:
+    return market in EXPERIMENTAL_MARKETS
 
 
 def devig(odds: list[float] | np.ndarray, method: str = "multiplicative") -> np.ndarray:
